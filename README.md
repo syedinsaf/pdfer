@@ -82,13 +82,6 @@ Download platform-specific binaries from:
 
 [https://github.com/syedinsaf/pdfer/releases](https://github.com/syedinsaf/pdfer/releases)
 
-Example:
-
-```bash
-pdfer merge a.pdf b.pdf -o merged.pdf
-pdfer split document.pdf 1,3,5-10
-```
-
 ---
 
 ## Basic Usage
