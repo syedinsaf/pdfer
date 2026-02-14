@@ -50,10 +50,11 @@ The tool prioritizes correctness, safety, and predictable behavior over
 feature bloat.
 
 pdfer is built for flexibility:
-• Precise command-line control
-• Automation & scripting
-• Developer workflows
-• User-friendly desktop usage
+
+* Precise command-line control
+* Automation & scripting
+* Developer workflows
+* User-friendly desktop usage
 
 ---
 
