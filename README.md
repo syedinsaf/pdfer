@@ -49,12 +49,12 @@ It provides two core capabilities:
 The tool prioritizes correctness, safety, and predictable behavior over
 feature bloat.
 
-Unlike many GUI-based utilities, pdfer is designed for:
+pdfer is built for flexibility:
 
-* developers
-* scripting workflows
-* automation pipelines
-* low-overhead environments
+• Precise command-line control
+• Automation & scripting
+• Developer workflows
+• User-friendly desktop usage
 
 ---
 
