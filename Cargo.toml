@@ -2,6 +2,12 @@
 name = "pdfer"
 version = "0.1.0"
 edition = "2024"
+description = "Lightweight and reliable utility for working with PDF documents"
+license = "Apache-2.0"
+repository = "https://github.com/syedinsaf/pdfer"
+readme = "README.md"
+keywords = ["pdf", "cli", "documents"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 clap = { version = "4.5.56", features = ["derive"] }
