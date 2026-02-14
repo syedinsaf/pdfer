@@ -1,0 +1,33 @@
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = [
+    "-C", "target-cpu=x86-64-v2",        # Dynamic glibc build: safe for broad distros
+    # Explicitly avoid crt-static to prevent pulling glibc with x86-64-v4/v3 notes
+]
+
+[target.x86_64-unknown-linux-musl]
+rustflags = [
+    "-C", "target-cpu=x86-64-v2",
+    "-C", "target-feature=+crt-static",  # Safe to static-link on musl (no glibc ISA issues)
+]
+
+[target.x86_64-pc-windows-msvc]
+rustflags = [
+    "-C", "target-cpu=x86-64-v2",
+    "-C", "target-feature=+crt-static",  # Windows: static CRT is fine and reduces deps
+]
+
+[target.x86_64-pc-windows-gnu]
+rustflags = [
+    "-C", "target-cpu=x86-64-v2",
+    "-C", "target-feature=+crt-static",
+]
+
+# Optional: Android cross-compilation setup (uncomment and adjust paths if needed)
+# [target.aarch64-linux-android]
+# ar = "/path/to/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+# linker = "/path/to/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang"
+#
+# [env]
+# CC_aarch64_linux_android = "/path/to/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang"
+# AR_aarch64_linux_android = "/path/to/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"

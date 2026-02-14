@@ -1,0 +1,20 @@
+[package]
+name = "pdfer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.5.56", features = ["derive"] }
+lopdf = "0.39.0"
+anyhow = "1.0.100"
+console = "0.16.2"
+
+[profile.release]
+codegen-units = 1
+debug = 0
+lto = "fat"
+strip = true
+opt-level = 3
+panic = "abort"
+overflow-checks = false
+incremental = false
