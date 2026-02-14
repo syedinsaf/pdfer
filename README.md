@@ -170,11 +170,12 @@ pdfer split file.pdf 5-
 
 pdfer is designed to avoid destructive mistakes:
 
-✔ Overwrite protection
-✔ Interactive conflict resolution
-✔ Strict file type validation
-✔ Refusal on invalid ranges
-✔ No partial writes on failure
+- ✔ Overwrite protection  
+- ✔ Interactive conflict resolution  
+- ✔ Strict file type validation  
+- ✔ Refusal on invalid ranges  
+- ✔ No partial writes on failure
+
 
 When an output file or directory already exists, pdfer will prompt for:
 
