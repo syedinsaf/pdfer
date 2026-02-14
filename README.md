@@ -51,10 +51,10 @@ feature bloat.
 
 pdfer is built for flexibility:
 
-• Precise command-line control
-• Automation & scripting
-• Developer workflows
-• User-friendly desktop usage
+* Precise command-line control
+* Automation & scripting
+* Developer workflows
+* User-friendly desktop usage
 
 ---
 
@@ -81,13 +81,6 @@ The tool refuses to proceed when encountering ambiguous or unsafe states
 Download platform-specific binaries from:
 
 [https://github.com/syedinsaf/pdfer/releases](https://github.com/syedinsaf/pdfer/releases)
-
-Example:
-
-```bash
-pdfer merge a.pdf b.pdf -o merged.pdf
-pdfer split document.pdf 1,3,5-10
-```
 
 ---
 
@@ -177,11 +170,12 @@ pdfer split file.pdf 5-
 
 pdfer is designed to avoid destructive mistakes:
 
-✔ Overwrite protection
-✔ Interactive conflict resolution
-✔ Strict file type validation
-✔ Refusal on invalid ranges
-✔ No partial writes on failure
+- ✔ Overwrite protection  
+- ✔ Interactive conflict resolution  
+- ✔ Strict file type validation  
+- ✔ Refusal on invalid ranges  
+- ✔ No partial writes on failure
+
 
 When an output file or directory already exists, pdfer will prompt for:
 
@@ -237,7 +231,7 @@ Pull requests should preserve:
 
 pdfer is licensed under the **Apache License 2.0**.
 
-See `LICENSE` for details.
+See [LICENSE](LICENSE) for details.
 
 ---
 
