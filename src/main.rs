@@ -5,18 +5,55 @@ use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-fn collect_pdfs_recursive(dir: &Path, pdfs: &mut Vec<PathBuf>) -> Result<()> {
+fn collect_pdfs_recursive(
+    dir: &Path,
+    pdfs: &mut Vec<PathBuf>,
+    visited: &mut HashSet<PathBuf>,
+) -> Result<()> {
     if !dir.is_dir() {
         return Ok(());
     }
 
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
+    let canonical_dir = match dir.canonicalize() {
+        Ok(path) => path,
+        Err(_) => {
+            if visited.contains(dir) {
+                return Ok(());
+            }
+            dir.to_path_buf()
+        }
+    };
+
+    if visited.contains(&canonical_dir) {
+        return Ok(());
+    }
+    visited.insert(canonical_dir);
+
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            eprintln!("Warning: Cannot read directory {}: {}", dir.display(), e);
+            return Ok(()); 
+        }
+    };
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                eprintln!(
+                    "Warning: Invalid directory entry in {}: {}",
+                    dir.display(),
+                    e
+                );
+                continue;
+            }
+        };
         let path = entry.path();
 
         if path.is_dir() {
-            collect_pdfs_recursive(&path, pdfs)?;
-        } else {
+            collect_pdfs_recursive(&path, pdfs, visited)?;
+        } else if path.is_file() {
             let is_pdf = path
                 .extension()
                 .and_then(|e| e.to_str())
@@ -99,9 +136,10 @@ fn main() -> Result<()> {
         }
 
         let mut pdf_files = Vec::new();
+        let mut visited_dirs = HashSet::new();
         for path in &cli.files {
             if cli.recursive && path.is_dir() {
-                collect_pdfs_recursive(path, &mut pdf_files)?;
+                collect_pdfs_recursive(path, &mut pdf_files, &mut visited_dirs)?;
             } else if path.is_file() {
                 let is_pdf = path
                     .extension()
@@ -148,8 +186,8 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    match cli.command.unwrap() {
-        Commands::Merge { inputs, output } => {
+    match cli.command {
+        Some(Commands::Merge { inputs, output }) => {
             if cli.info {
                 for input in &inputs {
                     let _ = show_pdf_info(input);
@@ -158,12 +196,12 @@ fn main() -> Result<()> {
             }
             merge_pdfs(&inputs, &output)?
         }
-        Commands::Split {
+        Some(Commands::Split {
             input,
             pages,
             output,
             extra_args,
-        } => {
+        }) => {
             if !extra_args.is_empty() {
                 bail!(
                     "Split command accepts only ONE input PDF file.\n\
@@ -195,6 +233,9 @@ fn main() -> Result<()> {
             });
             split_pdf(&input, &output, pages.as_deref())?
         }
+        None => {
+            bail!("No command specified");
+        }
     }
     Ok(())
 }
@@ -209,17 +250,25 @@ fn show_pdf_info(path: &Path) -> Result<usize> {
     println!("   Pages: {}", page_count);
     println!("   Version: {}", doc.version);
 
-    if let Ok(info_dict) = doc.trailer.get(b"Info") {
-        if let Object::Reference(id) = info_dict {
-            if let Ok(Object::Dictionary(info)) = doc.get_object(*id) {
-                if let Ok(Object::String(title, _)) = info.get(b"Title") {
-                    println!("   Title: {}", String::from_utf8_lossy(title));
-                }
-                if let Ok(Object::String(author, _)) = info.get(b"Author") {
-                    println!("   Author: {}", String::from_utf8_lossy(author));
-                }
-                if let Ok(Object::String(subject, _)) = info.get(b"Subject") {
-                    println!("   Subject: {}", String::from_utf8_lossy(subject));
+    if let Ok(info_ref) = doc.trailer.get(b"Info") {
+        if let Object::Reference(info_id) = info_ref {
+            if let Ok(info_obj) = doc.get_object(*info_id) {
+                if let Object::Dictionary(info) = info_obj {
+                    if let Ok(title_obj) = info.get(b"Title") {
+                        if let Object::String(title, _) = title_obj {
+                            println!("   Title: {}", String::from_utf8_lossy(title));
+                        }
+                    }
+                    if let Ok(author_obj) = info.get(b"Author") {
+                        if let Object::String(author, _) = author_obj {
+                            println!("   Author: {}", String::from_utf8_lossy(author));
+                        }
+                    }
+                    if let Ok(subject_obj) = info.get(b"Subject") {
+                        if let Object::String(subject, _) = subject_obj {
+                            println!("   Subject: {}", String::from_utf8_lossy(subject));
+                        }
+                    }
                 }
             }
         }
@@ -413,43 +462,47 @@ fn merge_pdfs(inputs: &[PathBuf], output: &Path) -> Result<()> {
     println!("Merging {} PDF(s)...", inputs.len());
     let mut merged = Document::with_version("1.5");
     let mut page_refs: Vec<Object> = Vec::new();
+    let mut global_id_map: HashMap<ObjectId, ObjectId> = HashMap::new();
+    let mut next_id = 1u32;
 
     for input in inputs {
         println!("  Processing: {}", input.display());
         let doc = Document::load(input)
             .with_context(|| format!("Failed to load PDF: {}", input.display()))?;
+
         if doc.get_pages().is_empty() {
             bail!("Input PDF has no pages: {}", input.display());
         }
 
-        let mut id_map: HashMap<ObjectId, ObjectId> = HashMap::new();
-        let mut new_id = merged.max_id + 1;
-
+        let mut local_id_map: HashMap<ObjectId, ObjectId> = HashMap::new();
         for &old_id in doc.objects.keys() {
-            id_map.insert(old_id, (new_id, 0));
-            new_id += 1;
+            let new_id = (next_id, 0);
+            local_id_map.insert(old_id, new_id);
+            global_id_map.insert(old_id, new_id);
+            next_id += 1;
         }
-        merged.max_id = new_id - 1;
 
         for (&old_id, obj) in doc.objects.iter() {
-            let new_id = id_map[&old_id];
+            let new_id = local_id_map[&old_id];
             let mut cloned = obj.clone();
-            update_references_in_object(&mut cloned, &id_map)?;
+            update_references_in_object(&mut cloned, &local_id_map)?;
             merged.objects.insert(new_id, cloned);
         }
 
         for (_, &page_id) in doc.get_pages().iter() {
-            if let Some(&new_page_id) = id_map.get(&page_id) {
+            if let Some(&new_page_id) = local_id_map.get(&page_id) {
                 page_refs.push(Object::Reference(new_page_id));
             }
         }
+
+        if inputs.iter().position(|p| p == input) == Some(0) {
+            preserve_document_metadata(&doc, &mut merged, &local_id_map)?;
+        }
     }
 
-    let mut pages_dict = Dictionary::new();
-    pages_dict.set(b"Type".to_vec(), Object::Name(b"Pages".to_vec()));
-    pages_dict.set(b"Kids".to_vec(), Object::Array(page_refs.clone()));
-    pages_dict.set(b"Count".to_vec(), Object::Integer(page_refs.len() as i64));
-    let pages_id = merged.add_object(pages_dict);
+    merged.max_id = next_id - 1;
+
+    let pages_id = create_page_tree(&mut merged, page_refs)?;
 
     let mut catalog = Dictionary::new();
     catalog.set(b"Type".to_vec(), Object::Name(b"Catalog".to_vec()));
@@ -533,24 +586,10 @@ fn split_pdf(input: &Path, output: &Path, pages_spec: Option<&str>) -> Result<()
         )
     })?;
 
-    let all_page_ids: Vec<ObjectId> = doc.page_iter().collect();
-
-    let mut page_dependencies: HashMap<ObjectId, HashSet<ObjectId>> = HashMap::new();
-    let mut cloned_objects: HashMap<ObjectId, Object> = HashMap::new();
-
-    for &page_id in &all_page_ids {
-        let mut referenced = HashSet::new();
-        collect_referenced_objects(&doc, page_id, &mut referenced)?;
-        page_dependencies.insert(page_id, referenced.clone());
-
-        for &obj_id in &referenced {
-            if obj_id == (0, 0) {
-                continue;
-            }
-            if !cloned_objects.contains_key(&obj_id) {
-                cloned_objects.insert(obj_id, doc.get_object(obj_id)?.clone());
-            }
-        }
+    let pages = doc.get_pages();
+    let mut page_num_to_id: HashMap<usize, ObjectId> = HashMap::new();
+    for (&page_num, &page_id) in pages.iter() {
+        page_num_to_id.insert(page_num as usize, page_id);
     }
 
     if page_numbers.len() == total_pages && is_contiguous(&page_numbers) && page_numbers[0] == 1 {
@@ -579,20 +618,25 @@ fn split_pdf(input: &Path, output: &Path, pages_spec: Option<&str>) -> Result<()
             io::stdout().flush()?;
         }
 
-        let page_id = all_page_ids[page_num - 1];
-        let referenced = &page_dependencies[&page_id];
+        let page_id = match page_num_to_id.get(&page_num) {
+            Some(&id) => id,
+            None => bail!("Page {} not found in document", page_num),
+        };
+
+        let mut referenced = HashSet::new();
+        collect_referenced_objects(&doc, page_id, &mut referenced)?;
 
         let mut single = Document::with_version("1.5");
         let mut id_map = HashMap::new();
         let mut new_id = 1u32;
 
-        for &obj_id in referenced {
+        for &obj_id in &referenced {
             if obj_id == (0, 0) {
                 continue;
             }
-            let cloned_obj = cloned_objects.get(&obj_id).unwrap();
+            let obj = doc.get_object(obj_id)?;
             id_map.insert(obj_id, (new_id, 0));
-            single.objects.insert((new_id, 0), cloned_obj.clone());
+            single.objects.insert((new_id, 0), obj.clone());
             new_id += 1;
         }
         single.max_id = new_id - 1;
@@ -602,6 +646,7 @@ fn split_pdf(input: &Path, output: &Path, pages_spec: Option<&str>) -> Result<()
         }
 
         let new_page_id = id_map[&page_id];
+
         let mut pages_dict = Dictionary::new();
         pages_dict.set(b"Type".to_vec(), Object::Name(b"Pages".to_vec()));
         pages_dict.set(
@@ -611,8 +656,10 @@ fn split_pdf(input: &Path, output: &Path, pages_spec: Option<&str>) -> Result<()
         pages_dict.set(b"Count".to_vec(), Object::Integer(1));
         let pages_id = single.add_object(pages_dict);
 
-        if let Object::Dictionary(page_dict) = single.objects.get_mut(&new_page_id).unwrap() {
-            page_dict.set(b"Parent".to_vec(), Object::Reference(pages_id));
+        if let Some(page_obj) = single.objects.get_mut(&new_page_id) {
+            if let Object::Dictionary(page_dict) = page_obj {
+                page_dict.set(b"Parent".to_vec(), Object::Reference(pages_id));
+            }
         }
 
         let mut catalog = Dictionary::new();
@@ -624,6 +671,8 @@ fn split_pdf(input: &Path, output: &Path, pages_spec: Option<&str>) -> Result<()
         single
             .trailer
             .set("Size", Object::Integer(single.max_id as i64 + 1));
+
+        preserve_document_metadata(&doc, &mut single, &id_map)?;
 
         let out_path = current_output.join(format!("page_{:03}.pdf", page_num));
         single.save(&out_path).with_context(|| {
@@ -661,12 +710,12 @@ fn update_references_in_object(
             }
         }
         Object::Array(items) => {
-            for item in items {
+            for item in items.iter_mut() {
                 update_references_in_object(item, id_map)?;
             }
         }
         Object::Dictionary(dict) => {
-            let keys: Vec<_> = dict.iter().map(|(k, _)| k.clone()).collect();
+            let keys: Vec<Vec<u8>> = dict.iter().map(|(k, _)| k.clone()).collect();
             for key in keys {
                 if let Ok(val) = dict.get_mut(&key) {
                     update_references_in_object(val, id_map)?;
@@ -674,7 +723,7 @@ fn update_references_in_object(
             }
         }
         Object::Stream(stream) => {
-            let keys: Vec<_> = stream.dict.iter().map(|(k, _)| k.clone()).collect();
+            let keys: Vec<Vec<u8>> = stream.dict.iter().map(|(k, _)| k.clone()).collect();
             for key in keys {
                 if let Ok(val) = stream.dict.get_mut(&key) {
                     update_references_in_object(val, id_map)?;
@@ -693,6 +742,10 @@ fn collect_referenced_objects(
 ) -> Result<()> {
     if !visited.insert(obj_id) {
         return Ok(());
+    }
+
+    if visited.len() > 10000 {
+        bail!("Object reference graph too deep (possible circular reference)");
     }
 
     let obj = doc.get_object(obj_id)?;
@@ -725,4 +778,63 @@ fn collect_from_object(
         _ => {}
     }
     Ok(())
+}
+
+fn preserve_document_metadata(
+    source: &Document,
+    target: &mut Document,
+    id_map: &HashMap<ObjectId, ObjectId>,
+) -> Result<()> {
+    if let Ok(info_ref) = source.trailer.get(b"Info") {
+        if let Object::Reference(info_id) = info_ref {
+            if let Some(&new_info_id) = id_map.get(&info_id) {
+                target.trailer.set("Info", Object::Reference(new_info_id));
+            }
+        }
+    }
+
+    if let Ok(id_array) = source.trailer.get(b"ID") {
+        target.trailer.set("ID", id_array.clone());
+    }
+
+    if let Ok(encrypt_ref) = source.trailer.get(b"Encrypt") {
+        if let Object::Reference(encrypt_id) = encrypt_ref {
+            if let Some(&new_encrypt_id) = id_map.get(&encrypt_id) {
+                target
+                    .trailer
+                    .set("Encrypt", Object::Reference(new_encrypt_id));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn create_page_tree(doc: &mut Document, page_refs: Vec<Object>) -> Result<ObjectId> {
+    const MAX_CHILDREN: usize = 8;
+
+    if page_refs.len() <= MAX_CHILDREN {
+        let mut pages_dict = Dictionary::new();
+        pages_dict.set(b"Type".to_vec(), Object::Name(b"Pages".to_vec()));
+        pages_dict.set(b"Kids".to_vec(), Object::Array(page_refs.clone()));
+        pages_dict.set(b"Count".to_vec(), Object::Integer(page_refs.len() as i64));
+        Ok(doc.add_object(pages_dict))
+    } else {
+        let mut intermediate_refs = Vec::new();
+        let chunks: Vec<_> = page_refs.chunks(MAX_CHILDREN).collect();
+
+        for chunk in chunks {
+            let mut pages_dict = Dictionary::new();
+            pages_dict.set(b"Type".to_vec(), Object::Name(b"Pages".to_vec()));
+            pages_dict.set(b"Kids".to_vec(), Object::Array(chunk.to_vec()));
+            pages_dict.set(b"Count".to_vec(), Object::Integer(chunk.len() as i64));
+            intermediate_refs.push(Object::Reference(doc.add_object(pages_dict)));
+        }
+
+        let mut root_pages_dict = Dictionary::new();
+        root_pages_dict.set(b"Type".to_vec(), Object::Name(b"Pages".to_vec()));
+        root_pages_dict.set(b"Kids".to_vec(), Object::Array(intermediate_refs));
+        root_pages_dict.set(b"Count".to_vec(), Object::Integer(page_refs.len() as i64));
+        Ok(doc.add_object(root_pages_dict))
+    }
 }
