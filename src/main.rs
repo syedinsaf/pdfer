@@ -14,32 +14,23 @@ fn collect_pdfs_recursive(
         return Ok(());
     }
 
-    let canonical_dir = match dir.canonicalize() {
-        Ok(path) => path,
-        Err(_) => {
-            if visited.contains(dir) {
-                return Ok(());
-            }
-            dir.to_path_buf()
-        }
-    };
+    let canonical_dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
 
-    if visited.contains(&canonical_dir) {
+    if !visited.insert(canonical_dir) {
         return Ok(());
     }
-    visited.insert(canonical_dir);
 
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(e) => {
             eprintln!("Warning: Cannot read directory {}: {}", dir.display(), e);
-            return Ok(()); 
+            return Ok(());
         }
     };
 
     for entry in entries {
         let entry = match entry {
-            Ok(entry) => entry,
+            Ok(e) => e,
             Err(e) => {
                 eprintln!(
                     "Warning: Invalid directory entry in {}: {}",
@@ -49,19 +40,18 @@ fn collect_pdfs_recursive(
                 continue;
             }
         };
+
         let path = entry.path();
 
         if path.is_dir() {
             collect_pdfs_recursive(&path, pdfs, visited)?;
-        } else if path.is_file() {
-            let is_pdf = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|ext| ext.eq_ignore_ascii_case("pdf"))
-                .unwrap_or(false);
-            if is_pdf {
-                pdfs.push(path);
-            }
+        } else if path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("pdf"))
+            .unwrap_or(false)
+        {
+            pdfs.push(path);
         }
     }
 
@@ -84,9 +74,6 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
 
-    #[arg(global = true)]
-    files: Vec<PathBuf>,
-
     #[arg(short, long, global = true)]
     info: bool,
 
@@ -96,6 +83,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    #[command(
+        visible_alias = "i",
+        after_help = "Examples:\n  pdfer info a.pdf\n  pdfer i *.pdf"
+    )]
+    Info {
+        #[arg(required = true)]
+        inputs: Vec<PathBuf>,
+    },
+
     #[command(
         visible_alias = "m",
         after_help = "Examples:\n  pdfer merge a.pdf b.pdf -o out.pdf\n  pdfer m *.pdf -o merged.pdf"
@@ -128,65 +124,56 @@ enum Commands {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    if cli.command.is_none() {
-        if cli.files.is_empty() {
-            bail!(
-                "No PDF files or command specified. Try 'pdfer --help' or 'pdfer <file.pdf>' for quick info"
-            );
-        }
-
-        let mut pdf_files = Vec::new();
-        let mut visited_dirs = HashSet::new();
-        for path in &cli.files {
-            if cli.recursive && path.is_dir() {
-                collect_pdfs_recursive(path, &mut pdf_files, &mut visited_dirs)?;
-            } else if path.is_file() {
-                let is_pdf = path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map(|ext| ext.eq_ignore_ascii_case("pdf"))
-                    .unwrap_or(false);
-
-                if is_pdf {
-                    pdf_files.push(path.clone());
-                } else {
-                    bail!("Non-PDF file provided: {}", path.display());
-                }
-            } else if path.is_dir() {
-                bail!(
-                    "'{}' is a directory. Use -r/--recursive to search subdirectories",
-                    path.display()
-                );
-            } else {
-                bail!("Invalid path: {}", path.display());
-            }
-        }
-
-        if pdf_files.is_empty() {
-            bail!("No PDF files found");
-        }
-
-        let mut total_pages = 0;
-        pdf_files.sort();
-        for file in &pdf_files {
-            match show_pdf_info(file) {
-                Ok(page_count) => total_pages += page_count,
-                Err(e) => eprintln!("Error reading {}: {}", file.display(), e),
-            }
-            if pdf_files.len() > 1 {
-                println!();
-            }
-        }
-
-        if pdf_files.len() > 1 {
-            println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            println!("Total: {} PDF(s), {} page(s)", pdf_files.len(), total_pages);
-        }
-
-        return Ok(());
-    }
-
     match cli.command {
+        Some(Commands::Info { inputs }) => {
+            let mut pdf_files = Vec::new();
+            let mut visited_dirs = HashSet::new();
+            for path in &inputs {
+                if cli.recursive && path.is_dir() {
+                    collect_pdfs_recursive(path, &mut pdf_files, &mut visited_dirs)?;
+                } else if path.is_file() {
+                    let is_pdf = path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .map(|ext| ext.eq_ignore_ascii_case("pdf"))
+                        .unwrap_or(false);
+
+                    if is_pdf {
+                        pdf_files.push(path.clone());
+                    } else {
+                        bail!("Non-PDF file provided: {}", path.display());
+                    }
+                } else if path.is_dir() {
+                    bail!(
+                        "'{}' is a directory. Use -r/--recursive to search subdirectories",
+                        path.display()
+                    );
+                } else {
+                    bail!("Invalid path: {}", path.display());
+                }
+            }
+
+            if pdf_files.is_empty() {
+                bail!("No PDF files found");
+            }
+
+            let mut total_pages = 0;
+            pdf_files.sort();
+            for file in &pdf_files {
+                match show_pdf_info(file) {
+                    Ok(page_count) => total_pages += page_count,
+                    Err(e) => eprintln!("Error reading {}: {}", file.display(), e),
+                }
+                if pdf_files.len() > 1 {
+                    println!();
+                }
+            }
+
+            if pdf_files.len() > 1 {
+                println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                println!("Total: {} PDF(s), {} page(s)", pdf_files.len(), total_pages);
+            }
+        }
         Some(Commands::Merge { inputs, output }) => {
             if cli.info {
                 for input in &inputs {
@@ -234,7 +221,7 @@ fn main() -> Result<()> {
             split_pdf(&input, &output, pages.as_deref())?
         }
         None => {
-            bail!("No command specified");
+            bail!("No command specified. Use 'pdfer --help' for usage information");
         }
     }
     Ok(())
@@ -446,6 +433,7 @@ fn merge_pdfs(inputs: &[PathBuf], output: &Path) -> Result<()> {
     if inputs.is_empty() {
         bail!("No input files provided");
     }
+
     if inputs.len() == 1 {
         println!("⚠️ Note: Only one input file provided. This will copy/repair the PDF.");
     }
@@ -460,13 +448,14 @@ fn merge_pdfs(inputs: &[PathBuf], output: &Path) -> Result<()> {
     };
 
     println!("Merging {} PDF(s)...", inputs.len());
+
     let mut merged = Document::with_version("1.5");
-    let mut page_refs: Vec<Object> = Vec::new();
-    let mut global_id_map: HashMap<ObjectId, ObjectId> = HashMap::new();
+    let mut page_refs = Vec::new();
     let mut next_id = 1u32;
 
-    for input in inputs {
+    for (idx, input) in inputs.iter().enumerate() {
         println!("  Processing: {}", input.display());
+
         let doc = Document::load(input)
             .with_context(|| format!("Failed to load PDF: {}", input.display()))?;
 
@@ -474,15 +463,15 @@ fn merge_pdfs(inputs: &[PathBuf], output: &Path) -> Result<()> {
             bail!("Input PDF has no pages: {}", input.display());
         }
 
-        let mut local_id_map: HashMap<ObjectId, ObjectId> = HashMap::new();
+        let mut local_id_map = HashMap::new();
+
         for &old_id in doc.objects.keys() {
             let new_id = (next_id, 0);
             local_id_map.insert(old_id, new_id);
-            global_id_map.insert(old_id, new_id);
             next_id += 1;
         }
 
-        for (&old_id, obj) in doc.objects.iter() {
+        for (&old_id, obj) in &doc.objects {
             let new_id = local_id_map[&old_id];
             let mut cloned = obj.clone();
             update_references_in_object(&mut cloned, &local_id_map)?;
@@ -495,7 +484,7 @@ fn merge_pdfs(inputs: &[PathBuf], output: &Path) -> Result<()> {
             }
         }
 
-        if inputs.iter().position(|p| p == input) == Some(0) {
+        if idx == 0 {
             preserve_document_metadata(&doc, &mut merged, &local_id_map)?;
         }
     }
@@ -517,6 +506,7 @@ fn merge_pdfs(inputs: &[PathBuf], output: &Path) -> Result<()> {
     merged
         .save(&current_output)
         .with_context(|| format!("Failed to save: {}", current_output.display()))?;
+
     println!("✓ Merged PDF saved: {}", current_output.display());
     Ok(())
 }
@@ -745,7 +735,7 @@ fn collect_referenced_objects(
     }
 
     if visited.len() > 10000 {
-        bail!("Object reference graph too deep (possible circular reference)");
+        bail!("Object reference graph too large (possible circular reference)");
     }
 
     let obj = doc.get_object(obj_id)?;
@@ -816,25 +806,59 @@ fn create_page_tree(doc: &mut Document, page_refs: Vec<Object>) -> Result<Object
     if page_refs.len() <= MAX_CHILDREN {
         let mut pages_dict = Dictionary::new();
         pages_dict.set(b"Type".to_vec(), Object::Name(b"Pages".to_vec()));
-        pages_dict.set(b"Kids".to_vec(), Object::Array(page_refs.clone()));
-        pages_dict.set(b"Count".to_vec(), Object::Integer(page_refs.len() as i64));
-        Ok(doc.add_object(pages_dict))
-    } else {
-        let mut intermediate_refs = Vec::new();
-        let chunks: Vec<_> = page_refs.chunks(MAX_CHILDREN).collect();
-
-        for chunk in chunks {
-            let mut pages_dict = Dictionary::new();
-            pages_dict.set(b"Type".to_vec(), Object::Name(b"Pages".to_vec()));
-            pages_dict.set(b"Kids".to_vec(), Object::Array(chunk.to_vec()));
-            pages_dict.set(b"Count".to_vec(), Object::Integer(chunk.len() as i64));
-            intermediate_refs.push(Object::Reference(doc.add_object(pages_dict)));
-        }
-
-        let mut root_pages_dict = Dictionary::new();
-        root_pages_dict.set(b"Type".to_vec(), Object::Name(b"Pages".to_vec()));
-        root_pages_dict.set(b"Kids".to_vec(), Object::Array(intermediate_refs));
-        root_pages_dict.set(b"Count".to_vec(), Object::Integer(page_refs.len() as i64));
-        Ok(doc.add_object(root_pages_dict))
+        pages_dict.set(b"Kids".to_vec(), Object::Array(page_refs));
+        pages_dict.set(
+            b"Count".to_vec(),
+            Object::Integer(pages_dict.get(b"Kids")?.as_array()?.len() as i64),
+        );
+        return Ok(doc.add_object(pages_dict));
     }
+
+    let mut intermediate_ids = Vec::new();
+
+    for chunk in page_refs.chunks(MAX_CHILDREN) {
+        let mut pages_dict = Dictionary::new();
+        pages_dict.set(b"Type".to_vec(), Object::Name(b"Pages".to_vec()));
+        pages_dict.set(b"Kids".to_vec(), Object::Array(chunk.to_vec()));
+        pages_dict.set(b"Count".to_vec(), Object::Integer(chunk.len() as i64));
+
+        let node_id = doc.add_object(pages_dict);
+        intermediate_ids.push(node_id);
+    }
+
+    // Set Parent for child page nodes
+    let mut child_parent_map: HashMap<ObjectId, ObjectId> = HashMap::new();
+    
+    for node_id in intermediate_ids.iter() {
+        if let Some(Object::Dictionary(dict)) = doc.objects.get(node_id) {
+            if let Ok(Object::Array(kids)) = dict.get(b"Kids") {
+                for kid in kids {
+                    if let Object::Reference(child_id) = kid {
+                        child_parent_map.insert(*child_id, (node_id.0, node_id.1));
+                    }
+                }
+            }
+        }
+    }
+    
+    for (child_id, parent_id) in child_parent_map {
+        if let Some(Object::Dictionary(child_dict)) = doc.objects.get_mut(&child_id) {
+            child_dict.set(b"Parent".to_vec(), Object::Reference(parent_id));
+        }
+    }
+
+    let mut root_dict = Dictionary::new();
+    root_dict.set(b"Type".to_vec(), Object::Name(b"Pages".to_vec()));
+    root_dict.set(
+        b"Kids".to_vec(),
+        Object::Array(
+            intermediate_ids
+                .iter()
+                .map(|id| Object::Reference(*id))
+                .collect(),
+        ),
+    );
+    root_dict.set(b"Count".to_vec(), Object::Integer(page_refs.len() as i64));
+
+    Ok(doc.add_object(root_dict))
 }
